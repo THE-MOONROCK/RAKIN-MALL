@@ -48,47 +48,123 @@ abstract class AbstractController extends Controller
 
         return $this->listIt($list);
     }
-
-    protected function listIt($list) {
-        return $list->paginate(request('pageLength'));
-    }
-
-//    protected function setup() {
-//        if ($this->dbRelations && is_array($this->dbRelations)
-//            && sizeof($this->dbRelations) > 0
-//            && $this->listRelations && is_array($this->listRelations)
-//            && sizeof($this->listRelations) == 0) {
-//            $this->listRelations = $this->dbRelations;
-//        }
-//    }
-
-    protected function searchFilter($list) {
-        if(request()->has('code'))
-            $list->where('code',request('code'));
-        if(request()->has('name'))
-            $list->where('name','like','%'.request('name').'%');
-        if(request()->has('title'))
-            $list->where('title','like','%'.request('title').'%');
-
-        if(request()->has('start_date_start') && request()->has('start_date_end'))
-            $list->whereBetween('prepare_start_date',[request('start_date_start'),request('start_date_end')]);
-
-        if(request()->has('due_date_start') && request()->has('due_date_end'))
-            $list->whereBetween('prepare_end_date',[request('due_date_start'),request('due_date_end')]);
-
-        $this->queryDefaultSort($list);
-    }
-
     /**
-     * Selection Option for API of the current model
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
      */
-    protected function options() {
-        return null;
-    }
+    public function store(Request $request)
+    {
+        if (!$this->validation) {
+            Log::error('Dear developer, missing implementation on your controller (store) that extended from AbstractController');
+            return $this->error(['message' => trans('general.technical_error')]);
+        }
+        $customMsg = $this->customOnSaveValidation();
+        if ($customMsg) {
+            return $this->error(['message' => $customMsg]);
+        }
 
-    protected function saveOrUpdate(Request $request=null, $id=null, $validation=[], $upload=false) {
+        return $this->saveOrUpdate($request, null, $this->validation);
+    }
+    /**
+     * Used to get <model> detail
+     * @get ("/api/<model>/{id}")
+     * @param ({
+     *      @Parameter("id", type="integer", required="true", description="Id of <model>"),
+     * })
+     * @return Response
+     */
+    public function show($id)
+    {
+        Log::debug("-----: on Show" . ($id ? ":" . $id : "") . " - " . $this->module);
+        if(!$this->canList())
+            return $this->error(['message' => trans('general.permission_denied')]);
+
+        if ($this->useUUID) {
+            $data = $this->modelClass::whereUuid($id)->first();
+            if(!$data){
+                //For Select
+                $data = $this->modelClass::find($id);
+            }
+        } else {
+            $data = $this->modelClass::find($id);
+        }
+
+        if(!$data)
+            return $this->error(['message' => trans($this->module . '.could_not_find')]);
+
+        $compactResource = $this->performAfterShow($data);
+        if ($compactResource) {
+            return $this->success($compactResource);
+        }
+        return $data;
+    }
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request, $id)
+    {
+        if (!$this->validation) {
+            Log::error('Dear developer, missing implementation on your controller (update) that extended from AbstractController');
+            return $this->error(['message' => trans('general.technical_error')]);
+        }
+
+        $customMsg = $this->customOnSaveValidation($id);
+        if ($customMsg) {
+            return $this->error(['message' => $customMsg]);
+        }
+
+        return $this->saveOrUpdate($request, $id, $this->validation);
+    }
+    /**
+     * Used to delete <model>
+     * @delete ("/api/<model>/{id}")
+     * @param ({
+     *      @Parameter("id", type="integer", required="true", description="Id of <model>"),
+     * })
+     * @return Response
+     */
+    public function destroy($id) 
+    {
+        Log::debug("-----: on destroy" . ($id ? ":" . $id : "") . " - " . $this->module);
+        if(!$this->canDelete())
+            return $this->error(['message' => trans('general.permission_denied')]);
+
+        if ($this->useUUID) {
+            $model = $this->modelClass::whereUuid($id)->first();
+        } else {
+            $model = $this->modelClass::find($id);
+        }
+
+
+        if(!$model)
+            return $this->error(['message' => trans($this->module . '.could_not_find')]);
+
+        $arrModel = $model->toArray();
+        if(array_key_exists('is_hidden', $arrModel) && $arrModel['is_hidden'] == true)
+            return $this->error(['message' => trans($this->module . '.default_cannot_be_deleted')]);
+
+        if (!$this->destroyPermissionRule($model)) {
+            return $this->error(['message' => trans('general.permission_denied')]);
+        }
+
+        $this->logActivity($model, ['module' => $this->module, 'module_id' => $model->id, 'activity' => 'deleted', 'message' => 'deleted']);
+
+        // $notification = \App\Notification::where('module',$this->module)->where('module_id',$model->id)->delete();
+
+        $model->delete();
+
+        return $this->success(['message' => trans($this->module . '.deleted')]);
+    }
+    protected function saveOrUpdate(Request $request=null, $id=null, $validation=[], $upload=false)
+    {
         Log::debug("-----: on SaveOrUpdate" . ($id ? ":" . $id : "") . " - " . $this->module);
-        $actionUpdate = ($id && ($this->useUUID? $id != null : $id > 0));
+        $actionUpdate = $this->isActionUpdate($id);
 
         if ($actionUpdate) {
             if(!$this->canEdit()){
@@ -160,7 +236,34 @@ abstract class AbstractController extends Controller
         $id = $this->useUUID ? $model->uuid : $model->id;
         return $this->success(['message' => $msg, 'id' => $id]);
     }
+    protected function searchFilter($list)
+    {
+        if(request()->has('code'))
+            $list->where('code',request('code'));
+        if(request()->has('name'))
+            $list->where('name','like','%'.request('name').'%');
+        if(request()->has('title'))
+            $list->where('title','like','%'.request('title').'%');
 
+        if(request()->has('start_date_start') && request()->has('start_date_end'))
+            $list->whereBetween('prepare_start_date',[request('start_date_start'),request('start_date_end')]);
+
+        if(request()->has('due_date_start') && request()->has('due_date_end'))
+            $list->whereBetween('prepare_end_date',[request('due_date_start'),request('due_date_end')]);
+
+        $this->queryDefaultSort($list);
+    }
+    protected function listIt($list)
+    {
+        return $list->paginate(request('pageLength'));
+    }
+    /**
+     * Selection Option for API of the current model
+     */
+    protected function options()
+    {
+        return null;
+    }
     /**
      * @param $module
      * @param $moduleId
@@ -172,7 +275,8 @@ abstract class AbstractController extends Controller
      * @param null $subModule
      * @param null $subModuleId
      */
-    protected function handleActivityLog($module, $model, $activity, $id=null, $key=null, $valueFrom=null, $valueTo=null, $message=null, $subModule = null, $subModuleId = null) {
+    protected function handleActivityLog($module, $model, $activity, $id=null, $key=null, $valueFrom=null, $valueTo=null, $message=null, $subModule = null, $subModuleId = null)
+    {
         $this->logActivity(
             $model, [
             'module' => $module,
@@ -186,190 +290,60 @@ abstract class AbstractController extends Controller
             'message' => $message
         ]);
     }
-
     /**
-     * Store a newly created resource in storage.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\Response
+     * Checke if update action
      */
-    public function store(Request $request)
+    protected function isActionUpdate($id = null)
     {
-        if (!$this->validation) {
-            Log::error('Dear developer, missing implementation on your controller (store) that extended from AbstractController');
-            return $this->error(['message' => trans('general.technical_error')]);
-        }
-        $customMsg = $this->customOnSaveValidation();
-        if ($customMsg) {
-            return $this->error(['message' => $customMsg]);
-        }
-
-        return $this->saveOrUpdate($request, null, $this->validation);
+        return ($id && ($this->useUUID? $id != null : $id > 0));
     }
-
-
     /**
-     * Update the specified resource in storage.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @param  int  $id
-     * @return \Illuminate\Http\Response
+     * Only if need for custom on save validation rule
      */
-    public function update(Request $request, $id)
+    protected function customOnSaveValidation($id=null)
     {
-        if (!$this->validation) {
-            Log::error('Dear developer, missing implementation on your controller (update) that extended from AbstractController');
-            return $this->error(['message' => trans('general.technical_error')]);
-        }
-
-        $customMsg = $this->customOnSaveValidation($id);
-        if ($customMsg) {
-            return $this->error(['message' => $customMsg]);
-        }
-
-        return $this->saveOrUpdate($request, $id, $this->validation);
+        return null;
     }
-
     /**
+     * Display the specified resource (after show function)
+     */
+    protected function performAfterShow($model)
+    {
+        return null;
+    }
+    /**
+    * Only if need for destroy permission rule rule
+    */
+    protected function destroyPermissionRule($model)
+    {
+        return $model;
+    }
+    /**
+     * Only if need for creation rule
+     * @param $model
+     * @param Request $request
+     * @return mixed
+     */
+    abstract protected function fillCreate($model, $request=null);
+    /**
+     * Only if need for updating rule
      * @param $model
      * @param Request $request
      * @return mixed
      */
     abstract protected function fillUpdate($model, $request=null);
-
     /**
-     * Only if need for creation rule
+     * Only if need for beforeSaving rule
      * @param $model
      * @param Request $request
+     * @return mixed
      */
-    protected function fillCreate($model, $request=null) {
-
-    }
-
-    protected function customOnSaveValidation($id=null) {
-        return null;
-    }
-
+    abstract protected function beforeSave($model, $request=null, $id=null);
     /**
+     * Only if need for afterSaving rule
      * @param $model
      * @param Request $request
+     * @return mixed
      */
-    protected function beforeSave($model, $request=null, $id=null) {
-    }
-
-    /**
-     * @param $model
-     * @param Request $request
-     */
-    protected function afterSave($model, $request=null, $id=null) {
-    }
-
-    /**
-     * Show the form for creating a new resource.
-     *
-     * @return \Illuminate\Http\Response
-     */
-    public function create()
-    {
-        //
-    }
-
-    /**
-     * Show the form for editing the specified resource.
-     *
-     * @param  int  $id
-     * @return \Illuminate\Http\Response
-     */
-    public function edit($id)
-    {
-        //
-    }
-
-    /**
-     * Used to get <model> detail
-     * @get ("/api/<model>/{id}")
-     * @param ({
-     *      @Parameter("id", type="integer", required="true", description="Id of <model>"),
-     * })
-     * @return Response
-     */
-    public function show($id){
-        Log::debug("-----: on Show" . ($id ? ":" . $id : "") . " - " . $this->module);
-        if(!$this->canList())
-            return $this->error(['message' => trans('general.permission_denied')]);
-
-        if ($this->useUUID) {
-            $data = $this->modelClass::whereUuid($id)->first();
-            if(!$data){
-                //For Select
-                $data = $this->modelClass::find($id);
-            }
-        } else {
-            $data = $this->modelClass::find($id);
-        }
-
-        if(!$data)
-            return $this->error(['message' => trans($this->module . '.could_not_find')]);
-
-        $compactResource = $this->performAfterShow($data);
-        if ($compactResource) {
-            return $this->success($compactResource);
-        }
-        return $data;
-    }
-
-    /**
-     * Display the specified resource (after show function)
-     */
-    protected function performAfterShow($model) {
-        return null;
-    }
-
-    /**
-     * Used to delete <model>
-     * @delete ("/api/<model>/{id}")
-     * @param ({
-     *      @Parameter("id", type="integer", required="true", description="Id of <model>"),
-     * })
-     * @return Response
-     */
-    public function destroy($id) {
-        Log::debug("-----: on destroy" . ($id ? ":" . $id : "") . " - " . $this->module);
-        if(!$this->canDelete())
-            return $this->error(['message' => trans('general.permission_denied')]);
-
-        if ($this->useUUID) {
-            $model = $this->modelClass::whereUuid($id)->first();
-        } else {
-            $model = $this->modelClass::find($id);
-        }
-
-
-        if(!$model)
-            return $this->error(['message' => trans($this->module . '.could_not_find')]);
-
-        $arrModel = $model->toArray();
-        if(array_key_exists('is_hidden', $arrModel) && $arrModel['is_hidden'] == true)
-            return $this->error(['message' => trans($this->module . '.default_cannot_be_deleted')]);
-
-        if (!$this->destroyPermissionRule($model)) {
-            return $this->error(['message' => trans('general.permission_denied')]);
-        }
-
-        $this->logActivity($model, ['module' => $this->module, 'module_id' => $model->id, 'activity' => 'deleted', 'message' => 'deleted']);
-
-        // $notification = \App\Notification::where('module',$this->module)->where('module_id',$model->id)->delete();
-
-        $model->delete();
-
-        return $this->success(['message' => trans($this->module . '.deleted')]);
-    }
-
-    protected function destroyPermissionRule($model) {
-        return $model;
-    }
-
-    protected function isActionUpdate($id = null) {
-        return ($id && ($this->useUUID? $id != null : $id > 0));
-    }
+    abstract protected function afterSave($model, $request=null, $id=null);
 }

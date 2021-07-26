@@ -109,9 +109,20 @@ class UserController extends AbstractController
 
     }
     //Implement method
-    
-    public function fillUpdate($model, $request=null) 
+    public function fillCreate($model, $request=null)
     {
 
+    }
+    public function fillUpdate($model, $request=null)
+    {
+
+    }
+    public function beforeSave($model, $request=null, $id=null)
+    {
+
+    }
+    public function afterSave($model, $request=null, $id=null)
+    {
+        
     }
 }
