@@ -1,0 +1,27 @@
+version: "3.7"
+
+services:
+  api:
+    image: repo.poscarcloud.com/sme-api:latest
+    build:
+      context: ./
+      dockerfile: Dockerfile.prod
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./laravel-server/:/var/www/html
+    environment:
+      - APP_ENV=production
+      - DB_CONNECTION=pgsql
+      - DB_HOST=127.0.0.1
+      - DB_PORT=5434
+      - DB_DATABASE=projx
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      - DB_PGSQL_SCHEMA=public
+      - JWT_SECRET=xDzpRgsOe06umc2CoaTRpzbaaEIoeMZzXD7eFjAo6PeeBNOPgTPdLqrkpfliyNu5
+    networks:
+      - wiki_college_network
+networks:
+    wiki_college_network:

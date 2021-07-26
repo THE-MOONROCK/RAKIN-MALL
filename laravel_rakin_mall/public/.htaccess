@@ -1,3 +1,9 @@
+php_value memory_limit 1024M
+php_value post_max_size 1024M
+php_value upload_max_filesize 1024M
+php_value max_execution_time 5000
+php_value max_input_time -1
+
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
